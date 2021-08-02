@@ -3,8 +3,10 @@
 #define CURRENT_LIMIT 2000    // current limit [mA]; 0 - no limit
 #define BRIGHTNESS 250        // [0-255]
 
-#define STEP_PERIOD_MSEC 500  // [msec]
-#define FADE_STEP 5
+#define STEP_PERIOD_MSEC 700  // [msec]
+
+#define EFFECT_PERIOD_MSEC 50   // [msec]
+#define FADE_STEP 10
 
 #define OPEN_BC 0
 #define PERIODIC_BC 1
@@ -24,16 +26,15 @@ CRGB leds[NUM_LEDS];
 byte state[LED_COLS][LED_ROWS];
 byte state_next[LED_COLS][LED_ROWS];
 
-uint32_t step_start_time = 0;
+uint32_t step_start_time;
+uint32_t effect_start_time;
 
 uint32_t checksum_history[HISTORY_LENGTH];
 uint16_t checksum_history_length;
 int16_t checksum_history_pos;
 int16_t repeating_checksum_history_counter;
 
-byte base_color_red=0, 
-     base_color_green=0, 
-     base_color_blue=0;
+byte base_color_red, base_color_green, base_color_blue;
 
 
 uint32_t get_random_seed() {
@@ -63,24 +64,23 @@ inline uint16_t get_pixel_index(byte x, byte y) {
     return (2*LED_COLS-1)*(y+1) - 2*x - 1;
 }
 
-void copy_next_state_to_state() {
+void copy_state(byte from[LED_COLS][LED_ROWS], byte to[LED_COLS][LED_ROWS]) {
   for (byte x = 0; x < LED_COLS; x++)
     for (byte y = 0; y < LED_ROWS; y++)
-      state[x][y] = state_next[x][y];
+      to[x][y] = from[x][y];
 }
 
-void swap_next_state_and_state() {
-  // TODO: swap pointers instead
+void swap_states(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS][LED_ROWS]) {
   byte t;
   for (byte x = 0; x < LED_COLS; x++)
     for (byte y = 0; y < LED_ROWS; y++) {
-      t = state[x][y];
-      state[x][y] = state_next[x][y];
-      state_next[x][y] = t;
+      t = state1[x][y];
+      state1[x][y] = state2[x][y];
+      state2[x][y] = t;
     }
 }
 
-void init_state() {
+void init_state(byte state[LED_COLS][LED_ROWS]) {
   for (byte x = 0; x < LED_COLS; x++) 
     for (byte y = 0; y < LED_ROWS; y++)
       state[x][y] = 0;
@@ -91,7 +91,7 @@ void init_state() {
   }
 }
 
-bool is_empty_state() {
+bool is_empty_state(byte state[LED_COLS][LED_ROWS]) {
   for (byte x = 0; x < LED_COLS; x++) 
     for (byte y = 0; y < LED_ROWS; y++)
       if (state[x][y]!=0)
@@ -100,7 +100,7 @@ bool is_empty_state() {
 }
 
 #if BC == OPEN_BC
-void update_state() { // open BC
+void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_ROWS]) { // open BC
   byte nn; // neighbours number
   for (byte x = 0; x < LED_COLS; x++) {
     for (byte y = 0; y < LED_ROWS; y++) {
@@ -127,9 +127,6 @@ void update_state() { // open BC
         state_next[x][y] = ((nn==2) || (nn==3)) ? 1 : 0;
     }
   }
-  
-  // copy_next_state_to_state();
-  swap_next_state_and_state();
 }
 
 // uint32_t get_state_checksum() {
@@ -179,7 +176,8 @@ void update_state() { // open BC
 //     return ~crc;
 // }
 
-uint32_t get_state_checksum() { // open BC
+// [LED_COLS][LED_ROWS]
+uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) { // open BC
   // standard crc32 algorithm
   uint32_t crc = 0xFFFFFFFF;
   for (byte x = 0; x < LED_COLS; x++)
@@ -193,7 +191,7 @@ uint32_t get_state_checksum() { // open BC
 #endif
 
 #if BC == PERIODIC_BC
-void update_state() { // periodic BC
+void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_ROWS]) { // periodic BC
   byte nn; // neighbours number
   byte xm, xp, ym, yp;
 
@@ -223,12 +221,9 @@ void update_state() { // periodic BC
         state_next[x][y] = ((nn==2) || (nn==3)) ? 1 : 0;
     }
   }
-  
-  // copy_next_state_to_state();
-  swap_next_state_and_state
 }
 
-uint32_t get_state_checksum() { // periodic BC
+uint32_t get_state_checksum(byte state[][]) { // periodic BC
   // TODO: to be implemented
 }
 #endif
@@ -241,18 +236,18 @@ void init_checksum_history() {
   repeating_checksum_history_counter = 0;
 }
 
-void add_to_checksum_history() {
+void add_to_checksum_history(byte state[LED_COLS][LED_ROWS]) {
   checksum_history_pos++;
   if (checksum_history_pos >= HISTORY_LENGTH)
     checksum_history_pos = 0;
-      
-  checksum_history[checksum_history_pos] = get_state_checksum();
+  
+  checksum_history[checksum_history_pos] = get_state_checksum(state);
 
   if (checksum_history_length<HISTORY_LENGTH)
     checksum_history_length++;
 }
 
-bool is_checksum_history_repeating() {
+bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
   int16_t period = -1;
   uint16_t k = checksum_history_pos;
   uint32_t checksum0 = checksum_history[k], checksum;
@@ -283,7 +278,7 @@ bool is_checksum_history_repeating() {
 
     int16_t time_to_die;
     if (period==1) {
-      if (is_empty_state())
+      if (is_empty_state(state))
         time_to_die = 4;
       else
         time_to_die = 10;
@@ -417,22 +412,53 @@ void setup() {
   FastLED.show();
 
   randomSeed(get_random_seed());
-  init_state();
+
+  init_state(state);
+  copy_state(state, state_next);
   init_checksum_history();
+  
+  // base_color_red = base_color_green = base_color_blue = 0;
   init_color();
 
-  step_start_time = millis();
+  effect_start_time = step_start_time = millis();
 }
 
 void loop() {
-  if (millis() - step_start_time >= STEP_PERIOD_MSEC) {
-          
-    update_state();
-    add_to_checksum_history();
+  uint32_t current_time = millis();
 
-    if (is_checksum_history_repeating()) {
+  if (current_time - effect_start_time >= EFFECT_PERIOD_MSEC) {      
+    // 1. Here we should have different
+    //   - state and
+    //   - state_next.
+    // 2. This part is supposed to be fast
+
+    uint16_t i;
+    for (byte x = 0; x < LED_COLS; x++)
+      for (byte y = 0; y < LED_ROWS; y++) {
+        i = get_pixel_index(x, y);
+        // if ((uint32_t)get_pixel_color(i) == 0)
+        //   continue;
+        leds[i].fadeToBlackBy(FADE_STEP);
+      }
+
+
+
+    effect_start_time = current_time;
+    
+    FastLED.show();
+  }    
+
+  if (current_time - step_start_time >= STEP_PERIOD_MSEC) {
+    // In this part we update state_next
+
+    update_state(state, state_next);
+    copy_state(state_next, state);
+    add_to_checksum_history(state);
+
+    if (is_checksum_history_repeating(state)) {
       randomSeed(get_random_seed());
-      init_state();
+
+      init_state(state);
       init_checksum_history();
       init_color();
     }
@@ -445,10 +471,9 @@ void loop() {
           leds[get_pixel_index(x, y)] = CRGB(0, 0, 0);
       }
     
-    step_start_time = millis();
-    
+    step_start_time = current_time;
+
     FastLED.show();
   }
-
 }
 
