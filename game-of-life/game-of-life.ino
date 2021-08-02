@@ -32,6 +32,8 @@ byte state[LED_COLS][LED_ROWS];
 byte state_next[LED_COLS][LED_ROWS];
 
 uint32_t step_start_time;
+int16_t between_steps_counter;
+
 uint32_t effect_start_time;
 uint16_t effect_step_counter;
 
@@ -281,6 +283,7 @@ void setup() {
   
   init_color();
 
+  between_steps_counter = -1;
   effect_step_counter = 0;
   effect_start_time = step_start_time = millis();
 }
@@ -296,7 +299,10 @@ void loop() {
     update_state(state, state_next);
     add_to_checksum_history(state_next);
 
-    if (is_checksum_history_repeating(state_next)) {
+    if (between_steps_counter == -1 && is_checksum_history_repeating(state_next))
+      between_steps_counter = 0;
+
+    if (between_steps_counter >= 2) {
       randomSeed(get_random_seed());
 
       init_empty_state(state);
@@ -306,7 +312,12 @@ void loop() {
       add_to_checksum_history(state_next);
       
       init_color();
+
+      between_steps_counter = -1;
     }
+    
+    if (between_steps_counter >= 0)
+      between_steps_counter++;
     
     effect_step_counter = 0;
     step_start_time = current_time;
