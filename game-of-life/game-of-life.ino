@@ -1,22 +1,27 @@
 #define LED_PIN 13
 
-#define CURRENT_LIMIT 2000    // current limit [mA]; 0 - no limit
-#define BRIGHTNESS 250        // [0-255]
-
-#define STEP_PERIOD_MSEC 700  // [msec]
-
-#define EFFECT_PERIOD_MSEC 50   // [msec]
-#define FADE_STEP 10
-
-#define OPEN_BC 0
-#define PERIODIC_BC 1
-#define BC OPEN_BC
+#define CURRENT_LIMIT 2000                 // Current limit [mA]; 0 - no limit
+#define BRIGHTNESS 250                     // [0-255]
 
 #define LED_COLS 8
 #define LED_ROWS 8
-#define NUM_LEDS (2*LED_COLS-1)*LED_COLS
+
+#define NUM_LEDS (2*LED_COLS-1)*LED_COLS   // Roughly, every other LED is covered.
+                                           // Depends on the particuler wiring. See also get_pixel_index()
+
+#define OPEN_BC 0
+#define PERIODIC_BC 1
+#define BC OPEN_BC                         // Boundary condition. Can be either OPEN_BC or PERIODIC_BC
 
 #define HISTORY_LENGTH 64
+
+#define STEP_PERIOD_MSEC 700               // State changes every STEP_PERIOD_MSEC
+
+#define EFFECT_PERIOD_MSEC 14              // Update time for the effects. Should be 20-100 times smaller than STEP_PERIOD_MSEC
+
+#define FADE_TURN_ON_LENGTH 15             // Out of STEP_PERIOD_MSEC/EFFECT_PERIOD_MSEC
+#define FADE_TURN_ON_FLICKER_LENGTH 1
+#define FADE_TURN_OFF_LENGTH 10            // Out of STEP_PERIOD_MSEC/EFFECT_PERIOD_MSEC
 
 
 #include <FastLED.h>
@@ -28,6 +33,7 @@ byte state_next[LED_COLS][LED_ROWS];
 
 uint32_t step_start_time;
 uint32_t effect_start_time;
+uint16_t effect_step_counter;
 
 uint32_t checksum_history[HISTORY_LENGTH];
 uint16_t checksum_history_length;
@@ -38,19 +44,19 @@ byte base_color_red, base_color_green, base_color_blue;
 
 
 uint32_t get_random_seed() {
-  // generates a random seed using 32 values 
-  // from different analog inputs
+  // Generates a random seed using 32 values from different analog inputs. 
+  // A single measurement of the same analog input often gives the same seed value.
   
   uint32_t seed = 0;
   uint32_t s;
-  byte a = 0; // number of the analog input [0-5]
+  byte a = 0; // Number of the analog input [0-5]
 
   for (byte l = 0; l < 32; l++) {
     s = analogRead(a);
     seed ^= s<<l;
     
     a++;
-    if (a>=5)
+    if (a>5)
       a = 0;
   }
 
@@ -58,6 +64,8 @@ uint32_t get_random_seed() {
 }
 
 inline uint16_t get_pixel_index(byte x, byte y) {
+  // Depends on the particuler wiring. See also NUM_LEDS definition
+
   if (y%2==0)
     return (2*LED_COLS-1)*y + 2*x;
   else
@@ -80,10 +88,14 @@ void swap_states(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS][LED_ROWS
     }
 }
 
-void init_state(byte state[LED_COLS][LED_ROWS]) {
+void init_empty_state(byte state[LED_COLS][LED_ROWS]) {
   for (byte x = 0; x < LED_COLS; x++) 
     for (byte y = 0; y < LED_ROWS; y++)
       state[x][y] = 0;
+}
+
+void init_state(byte state[LED_COLS][LED_ROWS]) {
+  init_empty_state(state);
   
   byte num = random(3*LED_COLS*LED_ROWS/16, LED_COLS*LED_ROWS/2);
   for (byte k = 0; k < num; k++) {
@@ -97,6 +109,13 @@ bool is_empty_state(byte state[LED_COLS][LED_ROWS]) {
       if (state[x][y]!=0)
         return false;
   return true;
+}
+
+byte game_of_life_rule(byte pixel_state, byte neighbours_number) {
+    if (pixel_state==0)
+      return neighbours_number==3 ? 1 : 0;
+    else
+      return neighbours_number==2 || neighbours_number==3 ? 1 : 0;
 }
 
 #if BC == OPEN_BC
@@ -121,72 +140,9 @@ void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_
         if (y < LED_ROWS-1) nn += state[x+1][y+1];
       }
       
-      if (state[x][y]==0)
-        state_next[x][y] = (nn==3) ? 1 : 0;
-      else
-        state_next[x][y] = ((nn==2) || (nn==3)) ? 1 : 0;
+      state_next[x][y] = game_of_life_rule(state[x][y], nn);
     }
   }
-}
-
-// uint32_t get_state_checksum() {
-//   uint32_t sum = 1;
-//   byte s;
-//   for (byte x = 0; x < LED_COLS; x++)
-//     for (byte y = 0; y < LED_ROWS; y++) {
-//       s = state[x][y];
-//       sum += (x*x + 11*x + 7*y*y + 13*y) * s*s 
-//            + (41*x*x + 71*x + 43*y*y + 73*y + 1) * s;
-//     }
-//   return sum;
-// }
-
-// uint32_t get_random_seed() {
-//   uint32_t seed = 0;
-//   uint32_t s;
-//   byte a = 0;
-
-//   for (byte l = 0; l < 32; l++) {
-//     s = analogRead(a);
-//     seed ^= s<<l;
-    
-//     if (a>=6)
-//       a = 0;
-//   }
-
-//   return seed;
-// }
-
-
-// #define CRC32C_POLY 0x82f63b78
-
-/* CRC-32 (Ethernet, ZIP, etc.) polynomial in reversed bit order. */
-/* #define POLY 0xedb88320 */
-
-// uint32_t crc32c(uint32_t crc, const unsigned char *buf, size_t len)
-// {
-//     int k;
-
-//     crc = ~crc;
-//     while (len--) {
-//         crc ^= *buf++;
-//         for (k = 0; k < 8; k++)
-//             crc = crc & 1 ? (crc >> 1) ^ CRC32C_POLY : crc >> 1;
-//     }
-//     return ~crc;
-// }
-
-// [LED_COLS][LED_ROWS]
-uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) { // open BC
-  // standard crc32 algorithm
-  uint32_t crc = 0xFFFFFFFF;
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++) {
-      crc ^= state[x][y];
-      for (byte l = 0; l < 8; l++)
-          crc = crc & 1 ? (crc >> 1) ^ 0x82f63b78 : crc >> 1;
-    }
-  return ~crc;
 }
 #endif
 
@@ -215,18 +171,24 @@ void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_
       nn += state[xp][y ];
       nn += state[xp][yp];
       
-      if (state[x][y]==0)
-        state_next[x][y] = (nn==3) ? 1 : 0;
-      else
-        state_next[x][y] = ((nn==2) || (nn==3)) ? 1 : 0;
+      state_next[x][y] = game_of_life_rule(state[x][y], nn);
     }
   }
 }
-
-uint32_t get_state_checksum(byte state[][]) { // periodic BC
-  // TODO: to be implemented
-}
 #endif
+
+uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) { // open BC
+  // Standard CRC32 algorithm
+  // TODO: to be implemented for periodic BC
+  uint32_t crc = 0xFFFFFFFF;
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = 0; y < LED_ROWS; y++) {
+      crc ^= state[x][y];
+      for (byte l = 0; l < 8; l++)
+          crc = crc & 1 ? (crc >> 1) ^ 0x82f63b78 : crc >> 1;
+    }
+  return ~crc;
+}
 
 void init_checksum_history() {
   for (uint16_t k = 0; k < HISTORY_LENGTH; k++) 
@@ -252,27 +214,20 @@ bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
   uint16_t k = checksum_history_pos;
   uint32_t checksum0 = checksum_history[k], checksum;
 
-// Serial.print("\n\n");
-// Serial.print(k); Serial.print("  ");
-// Serial.print(checksum0); Serial.print("  ");
-
   for (uint16_t l = 1; l < checksum_history_length; l++) {
     if (k>0)
       k--;
     else
       k = HISTORY_LENGTH-1;
-// Serial.print(k); Serial.print("  ");
 
     checksum = checksum_history[k];
-    // Serial.print(checksum); Serial.print("  ");
-// Serial.print(checksum); Serial.print("  "); Serial.print(checksum0); Serial.print("\n");
+
     if (checksum == checksum0) {
       period = l;
       break;
     }
   }
 
-// Serial.print(checksum0); Serial.print("  "); Serial.print(period); Serial.print("\n");
   if (period > 0) {
     repeating_checksum_history_counter++;
 
@@ -292,7 +247,6 @@ bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
   return false;
 }
 
-
 void init_color(int16_t intensity = 120, int16_t dispersion = 40) {
   int16_t r, g, b, rgb;
   byte scheme = random(1);
@@ -302,105 +256,10 @@ void init_color(int16_t intensity = 120, int16_t dispersion = 40) {
     b = 3*intensity - r - g;
   }
 
-
-
-
-//   for (byte l = 0; l < 64; l++) {
-//     r = random(96, 160);
-//     g = random(96, 160);
-//     b = random(96, 160);
-//     rgb = r + g + b;
-//     // if rgb
-
-//     if (
-//       abs(r - base_color_red  ) > 70 ||
-//       abs(g - base_color_green) > 70 ||
-//       abs(b - base_color_blue ) > 70
-//     )
-//       break;
-
-
-// Serial.print("ge0 ");
-// Serial.print(intensity * r);  Serial.print("   ");
-// Serial.print(intensity * g);  Serial.print("   ");
-// Serial.print(intensity * b);  Serial.print("   ");
-// Serial.print(rgb);  Serial.print("   ");
-// Serial.print("\n");
-//     r = 3 * intensity * r / rgb;
-//     g = 3 * intensity * g / rgb;
-//     b = 3 * intensity * b / rgb;
-// Serial.print("gen ");
-// Serial.print(r);  Serial.print("   ");
-// Serial.print(g);  Serial.print("   ");
-// Serial.print(b);  Serial.print("   ");
-// Serial.print("\n");
-
-// // Serial.print(abs(r - base_color_red  ));  Serial.print("   ");
-// // Serial.print(abs(g - base_color_green));  Serial.print("   ");
-// // Serial.print(abs(b - base_color_blue ));  Serial.print("   ");
-// // Serial.print("\n");
-//     if (
-//       abs(r - base_color_red  ) > 70 ||
-//       abs(g - base_color_green) > 70 ||
-//       abs(b - base_color_blue ) > 70
-//     )
-//       break;
-//   }
-
   base_color_red   = r;
   base_color_green = g;
   base_color_blue  = b;
-
-// Serial.print("    ");
-// Serial.print(base_color_red);  Serial.print("   ");
-// Serial.print(base_color_green);  Serial.print("   ");
-// Serial.print(base_color_blue);  Serial.print("   ");
-// Serial.print("\n\n");
 }
-
-// uint32_t get_pixel_color(uint16_t i) {
-//   return (((uint32_t)leds[i].r << 16) | ((long)leds[i].g << 8 ) | (long)leds[i].b);
-// }
-
-// void fade_to_black() {
-//   uint16_t i;
-//   for (byte x = 0; x < LED_COLS; x++)
-//     for (byte y = 0; y < LED_ROWS; y++) {
-//       i = get_pixel_index(x, y);
-//       if ((uint32_t)get_pixel_color(i) == 0)
-//         continue;
-//       leds[i].fadeToBlackBy(FADE_STEP);
-//     }
-// }
-
-// void fade() {
-
-// }
-
-// // This function modifies 'cur' in place.
-// CRGB fadeTowardColor( CRGB& cur, const CRGB& target, uint8_t amount)
-// {
-//   nblendU8TowardU8( cur.red,   target.red,   amount);
-//   nblendU8TowardU8( cur.green, target.green, amount);
-//   nblendU8TowardU8( cur.blue,  target.blue,  amount);
-//   return cur;
-// }
-
-// // Helper function that blends one uint8_t toward another by a given amount
-// void nblendU8TowardU8( uint8_t& cur, const uint8_t target, uint8_t amount)
-// {
-//   if( cur == target) return;
-  
-//   if( cur < target ) {
-//     uint8_t delta = target - cur;
-//     delta = scale8_video( delta, amount);
-//     cur += delta;
-//   } else {
-//     uint8_t delta = cur - target;
-//     delta = scale8_video( delta, amount);
-//     cur -= delta;
-//   }
-// }
 
 void setup() {
   Serial.begin(9600);
@@ -409,71 +268,101 @@ void setup() {
   if (CURRENT_LIMIT > 0)
     FastLED.setMaxPowerInVoltsAndMilliamps(5, CURRENT_LIMIT);
   FastLED.setBrightness(BRIGHTNESS);
+  fill_solid(leds, NUM_LEDS, CRGB(0, 0, 0));
   FastLED.show();
 
   randomSeed(get_random_seed());
 
-  init_state(state);
-  copy_state(state, state_next);
+  init_empty_state(state);
+  init_state(state_next);
+
   init_checksum_history();
+  add_to_checksum_history(state_next);
   
-  // base_color_red = base_color_green = base_color_blue = 0;
   init_color();
 
+  effect_step_counter = 0;
   effect_start_time = step_start_time = millis();
 }
 
 void loop() {
   uint32_t current_time = millis();
-
-  if (current_time - effect_start_time >= EFFECT_PERIOD_MSEC) {      
-    // 1. Here we should have different
-    //   - state and
-    //   - state_next.
-    // 2. This part is supposed to be fast
-
-    uint16_t i;
-    for (byte x = 0; x < LED_COLS; x++)
-      for (byte y = 0; y < LED_ROWS; y++) {
-        i = get_pixel_index(x, y);
-        // if ((uint32_t)get_pixel_color(i) == 0)
-        //   continue;
-        leds[i].fadeToBlackBy(FADE_STEP);
-      }
-
-
-
-    effect_start_time = current_time;
-    
-    FastLED.show();
-  }    
-
+  
   if (current_time - step_start_time >= STEP_PERIOD_MSEC) {
-    // In this part we update state_next
+    // Game of life logic.
+    // In this part we update state_next only
+    copy_state(state_next, state);
 
     update_state(state, state_next);
-    copy_state(state_next, state);
-    add_to_checksum_history(state);
+    add_to_checksum_history(state_next);
 
-    if (is_checksum_history_repeating(state)) {
+    if (is_checksum_history_repeating(state_next)) {
       randomSeed(get_random_seed());
 
-      init_state(state);
+      init_empty_state(state);
+      init_state(state_next);
+
       init_checksum_history();
+      add_to_checksum_history(state_next);
+      
       init_color();
     }
     
+    effect_step_counter = 0;
+    step_start_time = current_time;
+  }
+
+  if (current_time - effect_start_time >= EFFECT_PERIOD_MSEC) {      
+    // LED strip update with effects
+    // 1. Here we should have different state and state_next
+    // 2. This part is supposed to be fast
+    
+    byte s, s_next;
+    int16_t r, g, b;
     for (byte x = 0; x < LED_COLS; x++)
       for (byte y = 0; y < LED_ROWS; y++) {
-        if (state[x][y] == 1)
-          leds[get_pixel_index(x, y)] = CRGB(base_color_red, base_color_green, base_color_blue);
-        else
-          leds[get_pixel_index(x, y)] = CRGB(0, 0, 0);
+        s = state[x][y];
+        s_next = state_next[x][y];
+
+        if (s==0 && s_next==1) {
+          // Pixel turns on
+          if (effect_step_counter <= FADE_TURN_ON_LENGTH + FADE_TURN_ON_FLICKER_LENGTH) {
+            r = effect_step_counter * base_color_red / FADE_TURN_ON_LENGTH;
+            g = effect_step_counter * base_color_green / FADE_TURN_ON_LENGTH;
+            b = effect_step_counter * base_color_blue / FADE_TURN_ON_LENGTH;
+          } else {
+            r = base_color_red;
+            g = base_color_green;
+            b = base_color_blue;
+          }
+        
+        } else if (s==1 && s_next==0) {
+          // Pixel turns off
+          if (effect_step_counter <= FADE_TURN_OFF_LENGTH) {
+            r = (FADE_TURN_OFF_LENGTH-effect_step_counter) * base_color_red / FADE_TURN_OFF_LENGTH;
+            g = (FADE_TURN_OFF_LENGTH-effect_step_counter) * base_color_green / FADE_TURN_OFF_LENGTH;
+            b = (FADE_TURN_OFF_LENGTH-effect_step_counter) * base_color_blue / FADE_TURN_OFF_LENGTH;
+          } else {
+            r = g = b = 0;
+          }
+        
+        } else if (s==1 && s_next==1) {
+          // Pixel remains on
+          r = base_color_red;
+          g = base_color_green;
+          b = base_color_blue;
+
+        } else if (s==0 && s_next==0) {
+          // Pixel remains off
+          r = g = b = 0;
+        }
+
+        leds[get_pixel_index(x, y)] = CRGB(r, g, b);
       }
-    
-    step_start_time = current_time;
 
     FastLED.show();
+
+    effect_step_counter++;
+    effect_start_time = current_time;
   }
 }
-
