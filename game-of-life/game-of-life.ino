@@ -37,6 +37,7 @@
 CRGB leds[NUM_LEDS];
 byte state[LED_COLS][LED_ROWS];
 byte state_next[LED_COLS][LED_ROWS];
+byte state_attempt[LED_COLS][LED_ROWS];
 
 uint32_t step_start_time;
 int16_t between_steps_counter;
@@ -97,20 +98,36 @@ void swap_states(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS][LED_ROWS
     }
 }
 
-void init_empty_state(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++) 
+void pseudo_symmetrize_state_in_x(byte state[LED_COLS][LED_ROWS]) {
+  for (byte x = 0; x < LED_COLS/2; x++)
     for (byte y = 0; y < LED_ROWS; y++)
-      state[x][y] = 0;
+      state[LED_COLS-x-1][y] = state[x][y];
 }
 
-void init_state(byte state[LED_COLS][LED_ROWS]) {
-  // TODO: simulate several states for 10--100 steps and choose the most interesting one; this can be done in parallel
-  init_empty_state(state);
-  
-  byte num = random(3*LED_COLS*LED_ROWS/16, LED_COLS*LED_ROWS/2);
-  for (byte k = 0; k < num; k++) {
-    state[random(0, LED_COLS)][random(0, LED_ROWS)] = 1;
-  }
+void pseudo_symmetrize_state_in_y(byte state[LED_COLS][LED_ROWS]) {
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = 0; y < LED_ROWS/2; y++)
+      state[x][LED_ROWS-y-1] = state[x][y];
+}
+
+void pseudo_symmetrize_state_in_diag1(byte state[LED_COLS][LED_ROWS]) {
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = 0; y < x; y++)
+      state[x][y] = state[y][x];
+}
+
+void pseudo_symmetrize_state_in_diag2(byte state[LED_COLS][LED_ROWS]) {
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = x; y < LED_ROWS; y++)
+      state[x][y] = state[y][x];
+}
+
+bool are_states_identical(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS][LED_ROWS]) {
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = 0; y < LED_ROWS; y++)
+      if  (state1[x][y] != state2[x][y])
+        return false;
+  return true;
 }
 
 bool is_empty_state(byte state[LED_COLS][LED_ROWS]) {
@@ -119,6 +136,82 @@ bool is_empty_state(byte state[LED_COLS][LED_ROWS]) {
       if (state[x][y]!=0)
         return false;
   return true;
+}
+
+uint16_t count_nonzero_pixels(byte state[LED_COLS][LED_ROWS]) {
+  uint16_t nnz = 0;
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = 0; y < LED_ROWS; y++)
+      nnz += state[x][y] ? 1 : 0;
+  return nnz;
+}
+
+bool is_state_nontrivial(byte state[LED_COLS][LED_ROWS]) {
+  // Nontrivial state is a state with more than 4 pixels :)
+  uint16_t nnz = 0;
+  for (byte x = 0; x < LED_COLS; x++)
+    for (byte y = 0; y < LED_ROWS; y++) {
+      nnz += state[x][y] ? 1 : 0;
+      if (nnz > 4)
+        return true;
+    }
+  return false;
+}
+
+void init_empty_state(byte state[LED_COLS][LED_ROWS]) {
+  // Sets all pixels to zero
+  for (byte x = 0; x < LED_COLS; x++) 
+    for (byte y = 0; y < LED_ROWS; y++)
+      state[x][y] = 0;
+}
+
+void init_random_state(byte state[LED_COLS][LED_ROWS]) {
+  // Generates a random state
+  // Sometimes symmetrize it in x, y, xy, diag1, or diag2
+  init_empty_state(state);
+  
+  byte num = random(3*LED_COLS*LED_ROWS/16, LED_COLS*LED_ROWS/2);
+  for (byte k = 0; k < num; k++) {
+    state[random(0, LED_COLS)][random(0, LED_ROWS)] = 1;
+  }
+  
+  uint16_t symm_r = random(64);
+  if (symm_r == 0) {
+    pseudo_symmetrize_state_in_x(state);
+  } else if (symm_r == 1) {
+    pseudo_symmetrize_state_in_y(state);
+  } else if (symm_r == 2 || symm_r == 3) {
+    pseudo_symmetrize_state_in_x(state);
+    pseudo_symmetrize_state_in_y(state);
+  }
+#if LED_COLS == LED_ROWS
+  else if (symm_r == 4) {
+    pseudo_symmetrize_state_in_diag1(state);
+  } else if (symm_r == 5) {
+    pseudo_symmetrize_state_in_diag2(state);
+  }
+#endif
+}
+
+void init_nontrivial_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_ROWS]) {
+  // Generates a random state and makes sure that it will not end up in a few steps
+  // A single timestep without history takes ~ 36/100 ms ~ 342/1000 ms ~ 3391/10000 ms
+  // A single timestep with history takes ~ 46/100 ms ~ 425/1000 ms ~ 4212/10000 ms
+  // Function with 32 attempts and 16 timesteps takes max 320 ms
+  
+  for (uint16_t attempt = 0; attempt < 32; attempt++) {
+    init_empty_state(state);
+    init_random_state(state_attempt);
+    copy_state(state_attempt, state_next);
+    for (uint16_t t = 0; t < 16; t++) {
+      copy_state(state_attempt, state);
+      update_state(state, state_attempt);
+    }
+    if (is_state_nontrivial(state_attempt) && !are_states_identical(state, state_attempt))
+      break;
+  }
+  init_empty_state(state);
+  // state_next is already initialized
 }
 
 byte game_of_life_rule(byte pixel_state, byte neighbours_number) {
@@ -218,7 +311,7 @@ uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) {
 #elif CHECKSUM_TYPE == CHECKSUM_ADLER32
 uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) {
   // Adler-32 algorithm
-  // Takes about 4.7 ms for 8x8 array (not very optimized due to % operation at every step)
+  // Takes about 4.7 ms for 8x8 array (not very fast due to % operation at every step)
   // TODO: implement for periodic BC
   uint32_t a = 1, b = 0;
   for (byte x = 0; x < LED_COLS; x++)
@@ -289,7 +382,7 @@ bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
 
 void init_color(int16_t intensity = 120, int16_t overall_dispersion = 40) {
   // TODO: add color schemes
-  // TODO: add some color dispersion to individual pixels
+  // TODO: add some color dispersion to individual pixels (?)
   int16_t r, g, b, rgb;
   byte scheme = random(1);
   if (scheme == 0) {
@@ -312,17 +405,6 @@ void init_color(int16_t intensity = 120, int16_t overall_dispersion = 40) {
   base_color_blue  = b;
 }
 
-// static inline uint32_t rotate_right(uint32_t u, size_t r) {
-//     __asm__ ("rorl %%cl, %0" : "+r" (u) : "c" (r));
-//     return u;
-// }
-
-// static inline uint32_t ror(uint32_t u, size_t r) {
-//     ((unsigned)(x) >> (y) | (unsigned)(x) << 32 - (y))
-//     return u;
-// }
-// #define ROR(x,y) ((unsigned)(x) >> (y) | (unsigned)(x) << 32 - (y))
-
 void setup() {
   Serial.begin(9600);
 
@@ -332,54 +414,12 @@ void setup() {
   FastLED.setBrightness(BRIGHTNESS);
   fill_solid(leds, NUM_LEDS, CRGB(0, 0, 0));
   FastLED.show();
-
-// randomSeed(0);
-// uint32_t t = millis();
-// init_empty_state(state);
-// init_state(state_next);
-// // init_checksum_history();
-// // add_to_checksum_history(state_next);
-// for (uint16_t k = 0; k < 100; k++) {
-//   copy_state(state_next, state);
-//   update_state(state, state_next);
-//   // add_to_checksum_history(state_next);
-// }
-// Serial.print(millis()-t);  Serial.print(" ms\n"); 
-
-// a = a >> 7 | a << 32 - 7;  // ror a,7
-
-// uint32_t a = 0xFFFFFFFF-1;
-// Serial.print(a, BIN); Serial.print("\n"); 
-// for (uint16_t k = 0; k < 32; k++) {
-//   a = a >> 7 | a << 32 - 7;
-//   Serial.print(a, BIN); Serial.print("\n"); 
-// }
-
-// byte s = 2;
-// uint32_t a = 0xFFFFFFFF;
-// Serial.print("init: "); Serial.print(~a, BIN); Serial.print("\n");
-// for (uint16_t k = 0; k < 64; k++) {
-//   a ^= s;
-//   // a = (a >> 1 | a << 32 - 1);
-//   // a ^= ~s;
-//   // a = (a >> 3 | a << 32 - 3);
-//   // a = (a >> 3 | a << 32 - 3) ^ 0x82f63b78;
-//   a = a & 1 ? (a >> 1) ^ 0x82f63b78 : a >> 1;
-//   Serial.print(~a, BIN); Serial.print("\n");
-// }
-
-// for (byte x = 0; x < LED_COLS; x++)
-//   for (byte y = 0; y < LED_ROWS; y++) {
-//     init_empty_state(state);
-//     state[x][y] = 1;
-//     Serial.print(get_state_checksum(state), BIN); Serial.print("\n");
-    
-// }
-
-
+  
   randomSeed(get_random_seed());
-  init_empty_state(state);
-  init_state(state_next);
+  
+  // init_empty_state(state);
+  // init_random_state(state_next);
+  init_nontrivial_state(state, state_next);
 
   init_checksum_history();
   add_to_checksum_history(state_next);
@@ -397,17 +437,9 @@ void loop() {
   if (current_time - step_start_time >= STEP_PERIOD_MSEC) {
     // Game of life logic.
     // In this part we update state_next only
-    copy_state(state_next, state); // takes about 0.04 ms
-
-    update_state(state, state_next); // takes about 0.3 ms
-
-// uint32_t t;
-// t = millis();
-// for (uint16_t k = 0; k < 1000; k++) {
-//     add_to_checksum_history(state_next);
-// }
-// Serial.print(millis()-t);  Serial.print(" ms\n"); 
-
+    copy_state(state_next, state);        // Takes about 0.04 ms
+    update_state(state, state_next);      // Takes about 0.3 ms
+    add_to_checksum_history(state_next);  // Simplified CRC32 algorithm takes about 0.088 ms
 
     if (between_steps_counter == -1 && is_checksum_history_repeating(state_next))
       between_steps_counter = 0;
@@ -415,8 +447,9 @@ void loop() {
     if (between_steps_counter >= 3) {
       randomSeed(get_random_seed());
 
-      init_empty_state(state);
-      init_state(state_next);
+      // init_empty_state(state);
+      // init_random_state(state_next);
+      init_nontrivial_state(state, state_next);
 
       init_checksum_history();
       add_to_checksum_history(state_next);
