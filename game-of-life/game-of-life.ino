@@ -521,6 +521,7 @@ void loop() {
 
     } else { // between_steps_counter > 0
       // Slow change from state_next to empty state (black)
+      // TODO: For this particular application fadeToBlackBy() sucks. Replace it by the manual one
       fadeToBlackBy(leds, NUM_LEDS, FADE_TO_BLACK_STEP);
     }
 
