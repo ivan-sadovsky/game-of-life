@@ -53,25 +53,21 @@ int16_t repeating_checksum_history_counter;
 byte base_color_red, base_color_green, base_color_blue;
 // byte base_color_red_dispersion, base_color_green_dispersion, base_color_blue_dispersion;
 
-
 uint32_t get_random_seed() {
-  // Generates a random seed using 32 values from different analog inputs. 
+  // Generates a random seed using 32 values from different analog inputs.
   // A single measurement of the same analog input often gives the same seed value.
-  
-  uint32_t seed = 0;
-  uint32_t s;
+  // Uses CRC32 to mix inputs
+
+  uint32_t seed = 0xFFFFFFFF;
   byte a = 0; // Number of the analog input [0-5]
+  for (byte k = 0; k < 32; k++) {
+    seed ^= analogRead(a);
+    for (byte l = 0; l < 8; l++)
+        seed = seed & 1 ? (seed >> 1) ^ 0x82f63b78 : seed >> 1;
 
-  for (byte l = 0; l < 32; l++) {
-    s = analogRead(a);
-    seed ^= s<<l;
-    
-    a++;
-    if (a>5)
-      a = 0;
+    if (++a > 5) a = 0;
   }
-
-  return seed;  
+  return ~seed;
 }
 
 inline uint16_t get_pixel_index(byte x, byte y) {
@@ -131,7 +127,7 @@ bool are_states_identical(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS]
 }
 
 bool is_empty_state(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++) 
+  for (byte x = 0; x < LED_COLS; x++)
     for (byte y = 0; y < LED_ROWS; y++)
       if (state[x][y]!=0)
         return false;
@@ -160,7 +156,7 @@ bool is_state_nontrivial(byte state[LED_COLS][LED_ROWS]) {
 
 void init_empty_state(byte state[LED_COLS][LED_ROWS]) {
   // Sets all pixels to zero
-  for (byte x = 0; x < LED_COLS; x++) 
+  for (byte x = 0; x < LED_COLS; x++)
     for (byte y = 0; y < LED_ROWS; y++)
       state[x][y] = 0;
 }
@@ -169,12 +165,12 @@ void init_random_state(byte state[LED_COLS][LED_ROWS]) {
   // Generates a random state
   // Sometimes symmetrize it in x, y, xy, diag1, or diag2
   init_empty_state(state);
-  
+
   byte num = random(3*LED_COLS*LED_ROWS/16, LED_COLS*LED_ROWS/2);
   for (byte k = 0; k < num; k++) {
     state[random(0, LED_COLS)][random(0, LED_ROWS)] = 1;
   }
-  
+
   uint16_t symm_r = random(64);
   if (symm_r == 0) {
     pseudo_symmetrize_state_in_x(state);
@@ -198,7 +194,7 @@ void init_nontrivial_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_C
   // A single timestep without history takes ~ 36/100 ms ~ 342/1000 ms ~ 3391/10000 ms
   // A single timestep with history takes ~ 46/100 ms ~ 425/1000 ms ~ 4212/10000 ms
   // Function with 32 attempts and 16 timesteps takes max 320 ms
-  
+
   for (uint16_t attempt = 0; attempt < 32; attempt++) {
     init_empty_state(state);
     init_random_state(state_attempt);
@@ -214,7 +210,7 @@ void init_nontrivial_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_C
   // state_next is already initialized
 }
 
-byte game_of_life_rule(byte pixel_state, byte neighbours_number) {
+byte game_of_life_rule(const byte pixel_state, const byte neighbours_number) {
     if (pixel_state==0)
       return neighbours_number==3 ? 1 : 0;
     else
@@ -227,7 +223,7 @@ void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_
   for (byte x = 0; x < LED_COLS; x++) {
     for (byte y = 0; y < LED_ROWS; y++) {
       nn = 0;
-      
+
       if (x > 0) {
         if (y > 0) nn += state[x-1][y-1];
         nn += state[x-1][y ];
@@ -236,13 +232,13 @@ void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_
 
       if (y > 0) nn += state[x][y-1];
       if (y < LED_ROWS-1) nn += state[x][y+1];
-      
+
       if (x < LED_COLS-1) {
         if (y > 0) nn += state[x+1][y-1];
         nn += state[x+1][y ];
         if (y < LED_ROWS-1) nn += state[x+1][y+1];
       }
-      
+
       state_next[x][y] = game_of_life_rule(state[x][y], nn);
     }
   }
@@ -259,20 +255,20 @@ void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_
     for (byte y = 0; y < LED_ROWS; y++) {
       ym = y > 0 ? y-1 : LED_ROWS-1;
       yp = y < LED_ROWS-1 ? y+1 : 0;
-      
+
       nn = 0;
-      
+
       nn += state[xm][ym];
       nn += state[xm][y ];
       nn += state[xm][yp];
 
       nn += state[x ][ym];
       nn += state[x ][yp];
-      
+
       nn += state[xp][ym];
       nn += state[xp][y ];
       nn += state[xp][yp];
-      
+
       state_next[x][y] = game_of_life_rule(state[x][y], nn);
     }
   }
@@ -324,7 +320,7 @@ uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) {
 #endif
 
 void init_checksum_history() {
-  for (uint16_t k = 0; k < HISTORY_LENGTH; k++) 
+  for (uint16_t k = 0; k < HISTORY_LENGTH; k++)
     checksum_history[k] = 0;
   checksum_history_length = 0;
   checksum_history_pos = -1;
@@ -335,7 +331,7 @@ void add_to_checksum_history(byte state[LED_COLS][LED_ROWS]) {
   checksum_history_pos++;
   if (checksum_history_pos >= HISTORY_LENGTH)
     checksum_history_pos = 0;
-  
+
   checksum_history[checksum_history_pos] = get_state_checksum(state);
 
   if (checksum_history_length<HISTORY_LENGTH)
@@ -345,7 +341,8 @@ void add_to_checksum_history(byte state[LED_COLS][LED_ROWS]) {
 bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
   int16_t period = -1;
   uint16_t k = checksum_history_pos;
-  uint32_t checksum0 = checksum_history[k], checksum;
+  const uint32_t checksum0 = checksum_history[k];
+  uint32_t checksum;
 
   for (uint16_t l = 1; l < checksum_history_length; l++) {
     if (k>0)
@@ -383,7 +380,7 @@ bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
 void init_color(int16_t intensity = 120, int16_t overall_dispersion = 40) {
   // TODO: add color schemes
   // TODO: add some color dispersion to individual pixels (?)
-  int16_t r, g, b, rgb;
+  int16_t r, g, b;
   byte scheme = random(1);
   if (scheme == 0) {
     r = random(intensity-overall_dispersion, intensity+overall_dispersion);
@@ -393,7 +390,7 @@ void init_color(int16_t intensity = 120, int16_t overall_dispersion = 40) {
     // base_color_red_dispersion = 30;
     // base_color_green_dispersion = 30;
     // base_color_blue_dispersion = 30;
-  } 
+  }
   // else if (scheme == 1) {
   //   r = 255;
   //   g = random(127);
@@ -414,16 +411,16 @@ void setup() {
   FastLED.setBrightness(BRIGHTNESS);
   fill_solid(leds, NUM_LEDS, CRGB(0, 0, 0));
   FastLED.show();
-  
+
   randomSeed(get_random_seed());
-  
+
   // init_empty_state(state);
   // init_random_state(state_next);
   init_nontrivial_state(state, state_next);
 
   init_checksum_history();
   add_to_checksum_history(state_next);
-  
+
   init_color();
 
   between_steps_counter = -1;
@@ -433,7 +430,7 @@ void setup() {
 
 void loop() {
   uint32_t current_time = millis();
-  
+
   if (current_time - step_start_time >= STEP_PERIOD_MSEC) {
     // Game of life logic.
     // In this part we update state_next only
@@ -447,30 +444,29 @@ void loop() {
     if (between_steps_counter >= 3) {
       randomSeed(get_random_seed());
 
-      // init_empty_state(state);
-      // init_random_state(state_next);
       init_nontrivial_state(state, state_next);
 
       init_checksum_history();
       add_to_checksum_history(state_next);
-      
+
       init_color();
 
       between_steps_counter = -1;
     }
-    
+
     if (between_steps_counter >= 0)
       between_steps_counter++;
-    
+
     effect_step_counter = 0;
     step_start_time = current_time;
   }
 
-  if (current_time - effect_start_time >= EFFECT_PERIOD_MSEC) {      
+  if (current_time - effect_start_time >= EFFECT_PERIOD_MSEC) {
     // LED strip update with effects
     // 1. Here we should have different state and state_next
     // 2. This part is supposed to be fast
-    
+
+    // TODO: Move effect to the separate function
     byte s, s_next;
     int16_t r, g, b;
 
@@ -494,7 +490,7 @@ void loop() {
               g = base_color_green;
               b = base_color_blue;
             }
-          
+
           } else if (s==1 && s_next==0) {
             // Pixel turns off
             if (effect_step_counter <= FADE_TURN_OFF_LENGTH) {
@@ -504,7 +500,7 @@ void loop() {
             } else {
               r = g = b = 0;
             }
-          
+
           } else if (s==1 && s_next==1) {
             // Pixel remains on
             r = base_color_red;
