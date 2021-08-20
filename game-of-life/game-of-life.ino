@@ -1,7 +1,7 @@
 #define LED_PIN 13
 
-#define CURRENT_LIMIT 2000                 // Current limit [mA]; 0 - no limit
-#define BRIGHTNESS 250                     // [0-255]
+#define CURRENT_LIMIT 1000                 // Current limit [mA]; 0 - no limit
+#define BRIGHTNESS 140                     // [0-255]
 
 #define LED_COLS 8
 #define LED_ROWS 8
@@ -50,8 +50,8 @@ uint16_t checksum_history_length;
 int16_t checksum_history_pos;
 int16_t repeating_checksum_history_counter;
 
-byte base_color_red, base_color_green, base_color_blue;
-// byte base_color_red_dispersion, base_color_green_dispersion, base_color_blue_dispersion;
+byte color_red, color_green, color_blue;
+
 
 uint32_t get_random_seed() {
   // Generates a random seed using 32 values from different analog inputs.
@@ -377,29 +377,29 @@ bool is_checksum_history_repeating(byte state[LED_COLS][LED_ROWS]) {
   return false;
 }
 
-void init_color(int16_t intensity = 120, int16_t overall_dispersion = 40) {
-  // TODO: add color schemes
-  // TODO: add some color dispersion to individual pixels (?)
-  int16_t r, g, b;
-  byte scheme = random(1);
+void init_color() {
+  byte scheme = random(4);
   if (scheme == 0) {
-    r = random(intensity-overall_dispersion, intensity+overall_dispersion);
-    g = random(intensity-overall_dispersion, intensity+overall_dispersion);
-    b = 3*intensity - r - g;
-
-    // base_color_red_dispersion = 30;
-    // base_color_green_dispersion = 30;
-    // base_color_blue_dispersion = 30;
+      // Pink
+      color_red = 255;
+      color_green = random(40);
+      color_blue = 114 - color_green;
+  } else if (scheme == 1) {
+      // Yellow-orange
+      color_red = 255 - random(20);
+      color_blue = 0;
+      color_green = 100 + random(100);
+  } else if (scheme == 2) {
+      // Green
+      color_green = 255 - random(32);
+      color_blue = random(32);
+      color_red = random(32);
+  } else if (scheme == 3) {
+      // Blue
+      color_blue = 205 - random(32);
+      color_green = random(64);
+      color_red = 64 + random(80) - color_green;
   }
-  // else if (scheme == 1) {
-  //   r = 255;
-  //   g = random(127);
-  //   b = random(31);
-  // }
-
-  base_color_red   = r;
-  base_color_green = g;
-  base_color_blue  = b;
 }
 
 void setup() {
@@ -477,35 +477,33 @@ void loop() {
           s = state[x][y];
           s_next = state_next[x][y];
 
-          // r = base_color_red + random(-base_color_red_dispersion/2, base_color_red_dispersion/2)
-
           if (s==0 && s_next==1) {
             // Pixel turns on
             if (effect_step_counter <= FADE_TURN_ON_LENGTH + FADE_TURN_ON_FLICKER_LENGTH) {
-              r = effect_step_counter * base_color_red / FADE_TURN_ON_LENGTH;
-              g = effect_step_counter * base_color_green / FADE_TURN_ON_LENGTH;
-              b = effect_step_counter * base_color_blue / FADE_TURN_ON_LENGTH;
+              r = effect_step_counter * color_red / FADE_TURN_ON_LENGTH;
+              g = effect_step_counter * color_green / FADE_TURN_ON_LENGTH;
+              b = effect_step_counter * color_blue / FADE_TURN_ON_LENGTH;
             } else {
-              r = base_color_red;
-              g = base_color_green;
-              b = base_color_blue;
+              r = color_red;
+              g = color_green;
+              b = color_blue;
             }
 
           } else if (s==1 && s_next==0) {
             // Pixel turns off
             if (effect_step_counter <= FADE_TURN_OFF_LENGTH) {
-              r = (FADE_TURN_OFF_LENGTH-effect_step_counter) * base_color_red / FADE_TURN_OFF_LENGTH;
-              g = (FADE_TURN_OFF_LENGTH-effect_step_counter) * base_color_green / FADE_TURN_OFF_LENGTH;
-              b = (FADE_TURN_OFF_LENGTH-effect_step_counter) * base_color_blue / FADE_TURN_OFF_LENGTH;
+              r = (FADE_TURN_OFF_LENGTH-effect_step_counter) * color_red / FADE_TURN_OFF_LENGTH;
+              g = (FADE_TURN_OFF_LENGTH-effect_step_counter) * color_green / FADE_TURN_OFF_LENGTH;
+              b = (FADE_TURN_OFF_LENGTH-effect_step_counter) * color_blue / FADE_TURN_OFF_LENGTH;
             } else {
               r = g = b = 0;
             }
 
           } else if (s==1 && s_next==1) {
             // Pixel remains on
-            r = base_color_red;
-            g = base_color_green;
-            b = base_color_blue;
+            r = color_red;
+            g = color_green;
+            b = color_blue;
 
           } else if (s==0 && s_next==0) {
             // Pixel remains off
