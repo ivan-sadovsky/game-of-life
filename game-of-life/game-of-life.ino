@@ -1,37 +1,8 @@
-#define LED_PIN 13
-
-#define CURRENT_LIMIT 1000                 // Current limit [mA]; 0 - no limit
-#define BRIGHTNESS 140                     // [0-255]
-
-#define LED_COLS 8
-#define LED_ROWS 8
-
-#define NUM_LEDS (2*LED_COLS-1)*LED_COLS   // Roughly, every other LED is covered.
-                                           // Depends on the particuler wiring. See also get_pixel_index()
-
-#define OPEN_BC 1
-#define PERIODIC_BC 2
-#define BC OPEN_BC                         // Boundary condition. Can be either OPEN_BC or PERIODIC_BC
-
-
-#define CHECKSUM_CRC32 1                   // Slow and relatively reliable
-#define CHECKSUM_SIMPL_CRC32 2             // Simplified version of CRC32
-#define CHECKSUM_ADLER32 3                 // Fast and not very reliable
-#define CHECKSUM_TYPE CHECKSUM_SIMPL_CRC32
-
-#define HISTORY_LENGTH 256
-
-#define STEP_PERIOD_MSEC 700               // State changes every STEP_PERIOD_MSEC
-
-#define EFFECT_PERIOD_MSEC 14              // Update time for the effects. Should be 20-100 times smaller than STEP_PERIOD_MSEC
-
-#define FADE_TURN_ON_LENGTH 15             // Out of STEP_PERIOD_MSEC/EFFECT_PERIOD_MSEC
-#define FADE_TURN_ON_FLICKER_LENGTH 0
-#define FADE_TURN_OFF_LENGTH 10            // Out of STEP_PERIOD_MSEC/EFFECT_PERIOD_MSEC
-#define FADE_TO_BLACK_STEP 8
-
-
 #include <FastLED.h>
+// #include <Arduino.h>
+#include "constants.h"
+// #include "checksum.c"
+#include "logic.c"
 
 
 CRGB leds[NUM_LEDS];
@@ -78,116 +49,11 @@ inline uint16_t get_pixel_index(byte x, byte y) {
     return (2*LED_COLS-1)*(y+1) - 2*x - 1;
 }
 
-void copy_state(byte from[LED_COLS][LED_ROWS], byte to[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++)
-      to[x][y] = from[x][y];
-}
 
-void swap_states(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS][LED_ROWS]) {
-  byte t;
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++) {
-      t = state1[x][y];
-      state1[x][y] = state2[x][y];
-      state2[x][y] = t;
-    }
-}
 
-void pseudo_symmetrize_state_in_x(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS/2; x++)
-    for (byte y = 0; y < LED_ROWS; y++)
-      state[LED_COLS-x-1][y] = state[x][y];
-}
 
-void pseudo_symmetrize_state_in_y(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS/2; y++)
-      state[x][LED_ROWS-y-1] = state[x][y];
-}
 
-void pseudo_symmetrize_state_in_diag1(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < x; y++)
-      state[x][y] = state[y][x];
-}
 
-void pseudo_symmetrize_state_in_diag2(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = x; y < LED_ROWS; y++)
-      state[x][y] = state[y][x];
-}
-
-bool are_states_identical(byte state1[LED_COLS][LED_ROWS], byte state2[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++)
-      if  (state1[x][y] != state2[x][y])
-        return false;
-  return true;
-}
-
-bool is_empty_state(byte state[LED_COLS][LED_ROWS]) {
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++)
-      if (state[x][y]!=0)
-        return false;
-  return true;
-}
-
-uint16_t count_nonzero_pixels(byte state[LED_COLS][LED_ROWS]) {
-  uint16_t nnz = 0;
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++)
-      nnz += state[x][y] ? 1 : 0;
-  return nnz;
-}
-
-bool is_state_nontrivial(byte state[LED_COLS][LED_ROWS]) {
-  // Nontrivial state is a state with more than 4 pixels :)
-  uint16_t nnz = 0;
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++) {
-      nnz += state[x][y] ? 1 : 0;
-      if (nnz > 4)
-        return true;
-    }
-  return false;
-}
-
-void init_empty_state(byte state[LED_COLS][LED_ROWS]) {
-  // Sets all pixels to zero
-  for (byte x = 0; x < LED_COLS; x++)
-    for (byte y = 0; y < LED_ROWS; y++)
-      state[x][y] = 0;
-}
-
-void init_random_state(byte state[LED_COLS][LED_ROWS]) {
-  // Generates a random state
-  // Sometimes symmetrize it in x, y, xy, diag1, or diag2
-  init_empty_state(state);
-
-  byte num = random(3*LED_COLS*LED_ROWS/16, LED_COLS*LED_ROWS/2);
-  for (byte k = 0; k < num; k++) {
-    state[random(0, LED_COLS)][random(0, LED_ROWS)] = 1;
-  }
-
-  uint16_t symm_r = random(64);
-  if (symm_r == 0) {
-    pseudo_symmetrize_state_in_x(state);
-  } else if (symm_r == 1) {
-    pseudo_symmetrize_state_in_y(state);
-  } else if (symm_r == 2 || symm_r == 3) {
-    pseudo_symmetrize_state_in_x(state);
-    pseudo_symmetrize_state_in_y(state);
-  }
-#if LED_COLS == LED_ROWS
-  else if (symm_r == 4) {
-    pseudo_symmetrize_state_in_diag1(state);
-  } else if (symm_r == 5) {
-    pseudo_symmetrize_state_in_diag2(state);
-  }
-#endif
-}
 
 void init_nontrivial_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_ROWS]) {
   // Generates a random state and makes sure that it will not end up in a few steps
@@ -273,7 +139,8 @@ void update_state(byte state[LED_COLS][LED_ROWS], byte state_next[LED_COLS][LED_
     }
   }
 }
-#endif
+#endif // BC == PERIODIC_BC
+
 
 #if CHECKSUM_TYPE == CHECKSUM_CRC32
 uint32_t get_state_checksum(byte state[LED_COLS][LED_ROWS]) {
